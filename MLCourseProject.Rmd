@@ -1,0 +1,241 @@
+---
+title: "Practical Machine Learning Course Project"
+author: "Tom de Witt"
+date: "Sunday, June 21, 2015"
+output: html_document
+
+---
+
+-------------------------------
+
+# Practical Machine Learning Course Project - Weight lifting
+
+
+<br>
+
+## Executive Summary
+
+Six young health participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E).
+Class A corresponds to the specified execution of the exercise, while the other 4 classes correspond to common mistakes. Participants were supervised by an experienced weight lifter to make sure the execution complied to the manner they were supposed to simulate. The exercises were performed by six male participants aged between 20-28 years, with little weight lifting experience. We made sure that all participants could easily simulate the mistakes in a safe and controlled manner by using a relatively light dumbbell (1.25kg).
+
+The `Random Forest` model appear to be an excellent model for prediction in this study.
+
+Read more: http://groupware.les.inf.puc-rio.br/har#weight_lifting_exercises
+
+The main objectives of this project are as follows:
+
++ Predict the manner in which they did the exercise depicted by the `classe` variable.
++ Build a prediction model.
++ Calculate the out of sample error.
++ Use the prediction model to predict `20` different test cases provided.
+
+<br>
+
+
+### Load libraries
+Load the required libraries.
+
+```{r tidy=TRUE,echo=FALSE,message=FALSE,warning=FALSE}
+
+load <- function(pkg){
+  new.pkg <- pkg[!(pkg %in% installed.packages()[, "Package"])]
+  if (length(new.pkg))
+    install.packages(new.pkg, dependencies = TRUE)
+  sapply(pkg, require, character.only = TRUE)
+} 
+
+packages <- c("knitr","caret","gbm","plyr","randomForest")
+load(packages)
+
+
+#enable multi-core processing
+library(doParallel)
+cl <- makeCluster(detectCores())
+registerDoParallel(cl)
+
+opts_chunk$set(cache=TRUE,echo=TRUE)
+options(width=120)
+
+```
+<br>
+
+### Getting the data
+Load the training and test data sets.
+```{r, tidy=TRUE,echo=TRUE,message=FALSE,warning=FALSE}
+# read training and testing data for coursera course. 
+trainUrl <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+testUrl <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+training <- read.csv(url(trainUrl), header=TRUE, sep=",", na.strings=c("NA","#DIV/0!",""))
+testing <- read.csv(url(testUrl), header=TRUE, sep=",", na.strings=c("NA","#DIV/0!",""))
+```
+
+### Cleaning and preparing the data
+
+Notice that the last column of the test set is different (problem_id) from the last column of the training set (classe). 
+Apply the same transformations on both your training and testing set.
+
+```{r, tidy=TRUE,echo=TRUE,message=FALSE,warning=FALSE}
+#Remove unnecessary columns
+        
+# first 7 columns don't contain useful info
+training <- training[,-seq(1:7)]
+testing <- testing[,-seq(1:7)]
+
+# remove columns that have more than 20% NA's
+
+naColumns <- colSums(is.na(training)) > nrow(training) * 0.2
+training <- training[,!naColumns]
+testing <- testing[,!naColumns]
+
+# remove columns with near zero variance
+nearZeroVarColumns <- nearZeroVar(training,saveMetrics=TRUE)
+training <- training[, !nearZeroVarColumns$nzv]
+testing <- testing[, !nearZeroVarColumns$nzv]
+
+dim(training)
+dim(testing)
+
+# check for NAs in cleaned set.
+sum(complete.cases(training))==nrow(training)
+sum(complete.cases(testing))==nrow(testing)
+
+```
+<br>
+
+### Train Models
+
+Build a machine learning model for predicting the `classe` value based on the other features of the dataset.
+<br>
+
+#### <u>Data partitioning</u>
+
+Partition the `training` dataset into training and testing data sets for building our model.
+```{r tidy=TRUE,echo=TRUE,message=FALSE,warning=FALSE}
+
+partition <- createDataPartition(y = training$classe, p = 0.6, list = FALSE)
+trainingdata <- training[partition, ]
+testdata <- training[-partition, ]
+
+```
+<br>
+#### <u> Cross validation</u>
+Use Cross validation to determine how well the model will generalize. 
+<br>
+
+```{r tidy=TRUE,echo=TRUE,message=FALSE,warning=FALSE}
+fitControl <- trainControl(method = "cv", number = 2,, allowParallel = TRUE)  
+```
+Using `2-fold` cross validation.
+<br>
+
+#### <u>Model building: Boosting with trees</u> 
+
+```{r tidy=TRUE,echo=TRUE,message=FALSE,warning=FALSE}
+gbmFit <- train(classe ~ ., data = trainingdata, method = "gbm", trControl = fitControl, 
+    verbose = FALSE)
+gbmFit
+
+#Validate: Boosting with trees</u>
+
+gbm_pred <- predict(gbmFit, testdata)
+gbmConfusionMatrix <- confusionMatrix(gbm_pred, testdata$classe)
+gbmConfusionMatrix
+
+#Accuracy
+gbmAccuracy <-  round(gbmConfusionMatrix$overall['Accuracy'] * 100,2)
+```
+The `out of sample` accuracy value for Boosting with trees is `r gbmAccuracy`%.
+<br>
+
+#### <u>Model building: Random Forest</u>
+Build our model using the `Random Forest` machine learning technique.
+```{r tidy=TRUE,echo=TRUE,message=FALSE,warning=FALSE}
+rfFit <- train(classe ~ ., data = trainingdata, method = "rf", prox = TRUE, 
+               trControl = trainControl(method = "cv", number = 2, allowParallel = TRUE))
+rfFit
+```
+
+```{r tidy=TRUE,echo=TRUE,message=FALSE,warning=FALSE}
+plot(rfFit, ylim = c(0.9, 1))
+```
+
+<br>
+
+#### <u>Variable Importance</u>
+```{r tidy=TRUE,echo=TRUE,message=FALSE,warning=FALSE}
+imp <- varImp(rfFit, scale = FALSE)
+imp
+plot(imp, top = 20)
+```
+<br>
+
+#### <u>In sample accuracy</u>
+
+Calculate the prediction accuracy of the model on the training data set.
+```{r tidy=TRUE,echo=TRUE,message=FALSE,warning=FALSE}
+
+training_pred <- predict(rfFit, trainingdata)
+rfConfusionMatrix <- confusionMatrix(training_pred, trainingdata$classe)
+rfConfusionMatrix
+
+#Accuracy
+rfAccuracy1 <- round(rfConfusionMatrix$overall['Accuracy'] * 100,2)
+```
+The `in sample` accuracy value is Rand Forest is `r rfAccuracy1`%.
+<br>
+
+#### <u>Out of sample accuracy</u>
+
+Calculate the prediction accuracy of our model on the testing data set.
+```{r tidy=TRUE,echo=TRUE,message=FALSE,warning=FALSE}
+
+testing_pred <- predict(rfFit, testdata)
+rfConfusionMatrix2 <- confusionMatrix(testing_pred, testdata$classe)
+
+#Accuracy
+rfAccuracy2 <- round(rfConfusionMatrix2$overall['Accuracy'] * 100,2)
+```
+The `out of sample` accuracy value is `r rfAccuracy2`%.
+
+<br>
+
+## Prediction
+
+Apply the model to each of the 20 test cases in the testing data set.
+
+```{r tidy=TRUE,echo=TRUE,message=FALSE,warning=FALSE}
+
+answers <- predict(rfFit, testing)
+answers <- as.character(answers)
+answers
+
+```
+
+Write the answers to files.
+```{r tidy=TRUE,echo=TRUE,message=FALSE,warning=FALSE}
+
+pml_write_files = function(x) {
+    n = length(x)
+    for (i in 1:n) {
+        filename = paste0("problem_id_", i, ".txt")
+        write.table(x[i], file = filename, quote = FALSE, row.names = FALSE, 
+            col.names = FALSE)
+    }
+}
+
+pml_write_files(answers)
+
+```
+
+<br>
+
+## Conclusion
+
+`Random Forest` is chosen as machine learning algorithm for building our model because,
+
+   - Builds a highly accurate classifier.
+   - Can handle thousands of variables.
+   - Balances bias and variance trade-offs by settling for a balanced model.
+   - Using `k-fold` cross validation builds a robust model.
+   
+The `Random Forest` model appear to be an excellent model for prediction in this study.
